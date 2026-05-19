@@ -674,3 +674,55 @@ class BotInstance:
                 self.is_working = True
                 t = threading.Thread(target=self.worker_loop, daemon=True)
                 t.start()
+
+# ─── Initialization & Polling Hook ──────────────────────────────────────────
+
+# BOTS list se active instance create karte hain
+active_bots = {}
+for bot_cfg in BOTS:
+    instance = BotInstance(bot_cfg["token"], bot_cfg["chat_id"], bot_cfg["state_file"])
+    active_bots[bot_cfg["token"]] = instance
+
+# Telegram Bot events register karne ke liye main bot configuration
+main_bot_cfg = BOTS[0]
+bot = telebot.TeleBot(main_bot_cfg["token"])
+inst = active_bots[main_bot_cfg["token"]]
+
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    if message.chat.id == inst.chat_id:
+        inst.check_login_status()
+    else:
+        bot.reply_to(message, "Aap is bot ko use karne ke liye authorized nahi hain.")
+
+@bot.message_handler(func=lambda message: True)
+def handle_all_messages(message):
+    if message.chat.id != inst.chat_id:
+        return
+
+    text = message.text.strip()
+
+    # OTP aur Number states handling
+    if inst.ctx["state"] == "WAITING_FOR_NUMBER":
+        inst.ctx["number"] = text
+        inst.ctx["state"] = "NUMBER_RECEIVED"
+        return
+
+    if inst.ctx["state"] == "WAITING_FOR_OTP":
+        inst.ctx["otp"] = text
+        inst.ctx["state"] = "OTP_RECEIVED"
+        return
+
+    # Link extraction login
+    if text.startswith("http://") or text.startswith("https://"):
+        ttype = "zip" if is_zip_url(text) else "direct"
+        inst.task_queue.put({"type": ttype, "link": text, "folder": inst.ctx["pending_folder"]})
+        inst.msg(f"Link Queue mein add ho gaya hai! (Type: {ttype})")
+        inst.start_worker()
+    else:
+        inst.msg("Sahi URL bhejein ya login requirements poori karein.")
+
+if __name__ == "__main__":
+    print("Bot starting polling loop...")
+    # Infinity polling script ko background mein active rakhegi aur band nahi hone degi
+    bot.infinity_polling()
