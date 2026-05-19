@@ -332,7 +332,6 @@ class BotInstance:
     # ─── Jazz Drive Upload ────────────────────────────────────────────────────
 
     def jazz_drive_upload(self, filename, folder_name=""):
-        """Upload file to JazzDrive. Returns uploaded filename (for share link lookup)."""
         uploaded_name = os.path.basename(filename)
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=BROWSER_ARGS)
@@ -406,12 +405,10 @@ class BotInstance:
                 if not upload_done:
                     self.take_screenshot(page, f"Final {elapsed}s")
 
-                # ── [NEW] Get share link ──────────────────────────────────
                 share_link = self._get_share_link_from_page(page, uploaded_name)
                 if share_link:
                     self.msg(f"Share link:\n{share_link}")
                 else:
-                    # Try fresh page load to find the file
                     time.sleep(3)
                     share_link = self._get_share_link_fresh(ctx, uploaded_name, folder_name)
                     if share_link:
@@ -428,17 +425,11 @@ class BotInstance:
             finally:
                 browser.close()
 
-    # ─── [NEW] Share Link Helpers ─────────────────────────────────────────────
+    # ─── Share Link Helpers ─────────────────────────────────────────────
 
     def _get_share_link_from_page(self, page, filename):
-        """
-        Try to get share link on the current upload page.
-        JazzDrive typically shows files in a list — we hover/right-click
-        the file and look for a Share option.
-        """
         try:
             time.sleep(3)
-            # Dismiss any upload dialog first
             for dismiss in ["button:has-text('Close')", "button:has-text('Done')", ".modal-close"]:
                 try:
                     btn = page.locator(dismiss)
@@ -449,7 +440,6 @@ class BotInstance:
                 except:
                     pass
 
-            # Find file row by filename (partial match)
             name_without_ext = filename.rsplit(".", 1)[0][:30]
             file_row = None
             for selector in [
@@ -471,14 +461,13 @@ class BotInstance:
             file_row.hover()
             time.sleep(1)
 
-            # Look for options/more button near the file
             for opt_sel in [
                 "button[aria-label*='more' i]",
                 "button[aria-label*='option' i]",
                 "[class*='more'] button",
                 "button[title*='more' i]",
                 ".file-action",
-                "button svg",                 # icon button
+                "button svg",
             ]:
                 try:
                     btn = page.locator(opt_sel).first
@@ -489,7 +478,6 @@ class BotInstance:
                 except:
                     pass
 
-            # Click Share
             for share_sel in [
                 "text=Share",
                 "text=share",
@@ -505,29 +493,21 @@ class BotInstance:
                 except:
                     pass
 
-            # Extract link from input/textarea/clipboard dialog
             return self._extract_link_from_dialog(page)
-
-        except Exception as e:
+        except:
             return None
 
     def _get_share_link_fresh(self, ctx, filename, folder_name=""):
-        """
-        Open a fresh page, navigate to folder, find file, get share link.
-        Called as fallback if upload-page approach failed.
-        """
         page = ctx.new_page()
         try:
             page.goto("https://cloud.jazzdrive.com.pk/#folders", wait_until="networkidle", timeout=60000)
             time.sleep(4)
-
             if folder_name and folder_name.strip().upper() != "ROOT":
                 try:
                     page.get_by_text(folder_name.strip(), exact=False).first.click(timeout=5000)
                     time.sleep(3)
                 except:
                     pass
-
             return self._get_share_link_from_page(page, filename)
         except:
             return None
@@ -535,13 +515,8 @@ class BotInstance:
             page.close()
 
     def _extract_link_from_dialog(self, page):
-        """
-        After clicking Share, extract the URL from whatever dialog appears.
-        Tries input fields, textareas, and visible link text.
-        """
         try:
             time.sleep(2)
-            # Input with http URL
             for inp_sel in ["input[type='text']", "input[readonly]", "textarea"]:
                 try:
                     inputs = page.locator(inp_sel).all()
@@ -552,8 +527,6 @@ class BotInstance:
                                 return val
                 except:
                     pass
-
-            # Anchor tags with share-like URLs
             try:
                 links = page.locator("a[href*='share'], a[href*='cloud.jazz']").all()
                 for a in links:
@@ -562,8 +535,6 @@ class BotInstance:
                         return href
             except:
                 pass
-
-            # Any visible text that looks like a URL
             try:
                 body_text = page.inner_text("body")
                 urls = re.findall(r'https://[^\s"\'<>]+', body_text)
@@ -572,7 +543,6 @@ class BotInstance:
                         return u
             except:
                 pass
-
         except:
             pass
         return None
@@ -597,25 +567,12 @@ class BotInstance:
         result, error_msg = self.download_file(url, out_path)
         if not result:
             self.msg(f"Download fail!\n{error_msg[:200]}")
-            if "403" in error_msg or "Forbidden" in error_msg.lower():
-                self.msg(
-                    "⚠️ 403 Error — Possible causes:\n"
-                    "1. URL IP-locked hai (Jazz IP se generate hua)\n"
-                    "   GitHub ka alag IP hai, isliye fail\n"
-                    "2. URL expire ho gaya ho\n"
-                    "3. Site ne GitHub block kiya ho\n\n"
-                    "Try: Fresh link generate karo aur turant bhejo"
-                )
             return
         sz = os.path.getsize(result) / (1024 * 1024)
         self.msg(f"Downloaded! {sz:.1f} MB\nUploading...")
         self.upload_with_split(result, folder_name)
 
     def process_zip(self, url, folder_name=""):
-        """
-        Download a ZIP/RAR (or any archive URL), extract all videos,
-        upload each one. Works with /season command too (no .zip needed in URL).
-        """
         import shutil
         zip_path = f"/tmp/series_{self.chat_id}.zip"
         extract_dir = f"/tmp/series_{self.chat_id}_extracted"
@@ -634,16 +591,14 @@ class BotInstance:
         self.msg(f"Downloaded! {sz:.1f} MB\nExtracting...")
 
         extracted = False
-        # Try zipfile first
         try:
             if zipfile.is_zipfile(zip_path):
                 with zipfile.ZipFile(zip_path, "r") as zf:
                     zf.extractall(extract_dir)
                 extracted = True
-        except Exception as e:
+        except:
             pass
 
-        # Try unzip CLI
         if not extracted:
             try:
                 r = subprocess.run(["unzip", "-o", zip_path, "-d", extract_dir], timeout=300)
@@ -651,7 +606,6 @@ class BotInstance:
             except:
                 pass
 
-        # Try 7z (RAR, 7z, tar, gz etc.)
         if not extracted:
             try:
                 r = subprocess.run(["7z", "x", zip_path, f"-o{extract_dir}", "-y"], timeout=300)
@@ -665,7 +619,6 @@ class BotInstance:
 
         clean(zip_path)
 
-        # Gather all video files sorted by name (episode order)
         video_files = []
         for root, dirs, files in os.walk(extract_dir):
             dirs.sort()
@@ -716,4 +669,8 @@ class BotInstance:
                 self.is_working = False
 
     def start_worker(self):
-        with self.worker_lo
+        with self.worker_lock:
+            if not self.is_working:
+                self.is_working = True
+                t = threading.Thread(target=self.worker_loop, daemon=True)
+                t.start()
