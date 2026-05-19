@@ -71,6 +71,11 @@ class BotInstance:
         self.is_working = False
         self.worker_lock = threading.Lock()
         self.queue_paused = False
+        
+        # Tracking list for history and status
+        self.uploaded_history = [] 
+        self.current_processing_item = None
+
         self.ctx = {
             "state": "IDLE",
             "number": None,
@@ -107,29 +112,36 @@ class BotInstance:
     # ─── Login ──────────────────────────────────────────────────────────────
 
     def do_login(self, page, context):
-        self.msg("LOGIN REQUIRED\n\nJazz number bhejein\nFormat: 03XXXXXXXXX")
+        self.msg("📋 Jazz number bhejein\nFormat: 03XXXXXXXXX")
         self.ctx["state"] = "WAITING_FOR_NUMBER"
         for _ in range(500):
             if self.ctx["state"] == "NUMBER_RECEIVED":
                 break
             time.sleep(1)
         else:
-            self.msg("Timeout! Task cancel.")
+            self.msg("❌ Timeout! Task cancel.")
+            self.ctx["state"] = "IDLE"
             return False
+            
+        self.msg("⏳ Number submit ho raha hai, thora wait karein...")
         page.locator("#msisdn").fill(self.ctx["number"])
         time.sleep(1)
         page.locator("#signinbtn").first.click()
         time.sleep(3)
         self.take_screenshot(page, "Number submit")
-        self.msg("Number accept!\n\nOTP bhejein:")
+        
+        self.msg("🔑 Number accept!\n\nOTP bhejein:")
         self.ctx["state"] = "WAITING_FOR_OTP"
         for _ in range(500):
             if self.ctx["state"] == "OTP_RECEIVED":
                 break
             time.sleep(1)
         else:
-            self.msg("Timeout! Task cancel.")
+            self.msg("❌ Timeout! Task cancel.")
+            self.ctx["state"] = "IDLE"
             return False
+            
+        self.msg("⏳ OTP enter ho raha hai...")
         for i, digit in enumerate(self.ctx["otp"].strip()[:6], 1):
             try:
                 f = page.locator(f"//input[@aria-label='Digit {i}']")
@@ -141,12 +153,12 @@ class BotInstance:
         time.sleep(5)
         self.take_screenshot(page, "OTP submit")
         context.storage_state(path=self.state_file)
-        self.msg("LOGIN SUCCESSFUL!\n\nSession save!\nLink bhejein")
+        self.msg("✅ LOGIN SUCCESSFUL!\n\nSession save!\nAb aap links bhej sakte hain.")
         self.ctx["state"] = "IDLE"
         return True
 
     def check_login_status(self):
-        self.msg("Jazz Drive login check...")
+        self.msg("🔍 Jazz Drive login check ho raha hai...")
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=BROWSER_ARGS)
             ctx = browser.new_context(
@@ -158,12 +170,12 @@ class BotInstance:
                 page.goto("https://cloud.jazzdrive.com.pk/", wait_until="networkidle", timeout=90000)
                 time.sleep(3)
                 if page.locator("#msisdn").is_visible():
-                    self.msg("Session expire!\nLogin karte hain...")
+                    self.msg("⚠️ Session expire!\nLogin verification shuru...")
                     self.do_login(page, ctx)
                 else:
-                    self.msg("LOGIN VALID!\n\nLink bhejein!")
+                    self.msg("✅ LOGIN VALID!\n\nBot ready hai, link bhejein!")
             except Exception as e:
-                self.msg(f"Error: {str(e)[:150]}")
+                self.msg(f"❌ Error: {str(e)[:150]}")
             finally:
                 browser.close()
 
@@ -300,7 +312,7 @@ class BotInstance:
         size_mb = os.path.getsize(filepath) / (1024 * 1024)
         if size_mb <= MAX_SIZE_MB:
             return [filepath]
-        self.msg(f"File {size_mb:.0f}MB — splitting...")
+        self.msg(f"✂️ File {size_mb:.0f}MB — splitting...")
         base = filepath.rsplit(".", 1)[0]
         ext = filepath.rsplit(".", 1)[-1]
         result = subprocess.run(
@@ -344,10 +356,9 @@ class BotInstance:
                 page.goto("https://cloud.jazzdrive.com.pk/#folders", wait_until="networkidle", timeout=90000)
                 time.sleep(5)
                 if page.locator("#msisdn").is_visible():
-                    self.msg("Session expire! Login karo...")
+                    self.msg("⚠️ Session expire! Automatic login check...")
                     ok = self.do_login(page, ctx)
                     if not ok:
-                        self.msg("Login fail.")
                         return None
                     page.goto("https://cloud.jazzdrive.com.pk/#folders", wait_until="networkidle", timeout=90000)
                     time.sleep(5)
@@ -356,9 +367,8 @@ class BotInstance:
                     try:
                         page.get_by_text(folder_name.strip(), exact=False).first.click(timeout=5000)
                         time.sleep(3)
-                        self.msg(f"Folder: {folder_name}")
                     except:
-                        self.msg(f"Folder '{folder_name}' nahi mila, root mein upload...")
+                        pass
 
                 ctx.storage_state(path=self.state_file)
                 abs_path = os.path.abspath(filename)
@@ -385,7 +395,7 @@ class BotInstance:
 
                 sz = os.path.getsize(filename) / (1024 * 1024)
                 wait_sec = max(60, int(sz * 4))
-                self.msg(f"Uploading {uploaded_name[:50]}... (~{wait_sec}s)")
+                self.msg(f"📤 Uploading {uploaded_name[:50]}... (~{wait_sec}s)")
 
                 elapsed = 0
                 upload_done = False
@@ -394,7 +404,7 @@ class BotInstance:
                     elapsed += 30
                     try:
                         if page.locator("text=Uploads completed").is_visible():
-                            self.msg(f"Upload complete! ({elapsed}s)")
+                            self.msg(f"🚀 Upload complete! ({elapsed}s)")
                             upload_done = True
                             break
                     except:
@@ -407,20 +417,23 @@ class BotInstance:
 
                 share_link = self._get_share_link_from_page(page, uploaded_name)
                 if share_link:
-                    self.msg(f"Share link:\n{share_link}")
+                    self.msg(f"🔗 Share link:\n{share_link}")
                 else:
                     time.sleep(3)
                     share_link = self._get_share_link_fresh(ctx, uploaded_name, folder_name)
                     if share_link:
-                        self.msg(f"Share link:\n{share_link}")
+                        self.msg(f"🔗 Share link:\n{share_link}")
                     else:
-                        self.msg("Share link nahi mila (manually check karo)")
+                        self.msg("⚠️ Share link direct nahi mila.")
 
                 ctx.storage_state(path=self.state_file)
+                
+                # History track karne ke liye add kiya
+                self.uploaded_history.append(uploaded_name)
                 return uploaded_name
 
             except Exception as e:
-                self.msg(f"Upload error: {str(e)[:200]}")
+                self.msg(f"❌ Upload error: {str(e)[:200]}")
                 return None
             finally:
                 browser.close()
@@ -563,13 +576,13 @@ class BotInstance:
         out_name = get_filename_from_url(url)
         out_path = f"/tmp/{out_name}"
         clean(out_path)
-        self.msg(f"Downloading...\n{out_name[:60]}")
+        self.msg(f"⬇️ Downloading...\n{out_name[:60]}")
         result, error_msg = self.download_file(url, out_path)
         if not result:
-            self.msg(f"Download fail!\n{error_msg[:200]}")
+            self.msg(f"❌ Download fail!\n{error_msg[:200]}")
             return
         sz = os.path.getsize(result) / (1024 * 1024)
-        self.msg(f"Downloaded! {sz:.1f} MB\nUploading...")
+        self.msg(f"📥 Downloaded! {sz:.1f} MB\nUploading to Jazz Drive...")
         self.upload_with_split(result, folder_name)
 
     def process_zip(self, url, folder_name=""):
@@ -581,14 +594,14 @@ class BotInstance:
             shutil.rmtree(extract_dir)
         os.makedirs(extract_dir, exist_ok=True)
 
-        self.msg("ZIP/Archive download ho raha hai...")
+        self.msg("📦 ZIP archive download ho raha hai...")
         result, error_msg = self.download_file(url, zip_path)
         if not result or not file_ok(zip_path):
-            self.msg(f"Download fail!\n{error_msg[:200]}")
+            self.msg(f"❌ Archive Download fail!\n{error_msg[:200]}")
             return
 
         sz = os.path.getsize(zip_path) / (1024 * 1024)
-        self.msg(f"Downloaded! {sz:.1f} MB\nExtracting...")
+        self.msg(f"📥 Downloaded! {sz:.1f} MB\nExtracting archive...")
 
         extracted = False
         try:
@@ -614,7 +627,7 @@ class BotInstance:
                 pass
 
         if not extracted:
-            self.msg("Extract fail! 7z, unzip sab try hua.")
+            self.msg("❌ Extract fail! Unzip and 7z failed.")
             return
 
         clean(zip_path)
@@ -627,21 +640,20 @@ class BotInstance:
                     video_files.append(os.path.join(root, f))
 
         if not video_files:
-            self.msg("Archive mein koi video nahi mili!")
+            self.msg("⚠️ Archive mein koi video nahi mili!")
             shutil.rmtree(extract_dir, ignore_errors=True)
             return
 
-        self.msg(f"{len(video_files)} episodes mile!\nUpload shuru...")
+        self.msg(f"🎬 {len(video_files)} Episodes extracted! Uploading series...")
 
         for i, video_path in enumerate(video_files, 1):
             fname = os.path.basename(video_path)
             fsize = os.path.getsize(video_path) / (1024 * 1024)
-            self.msg(f"Episode {i}/{len(video_files)}\n{fname}\n{fsize:.1f} MB")
+            self.msg(f"🎥 Episode {i}/{len(video_files)}\n{fname}\n{fsize:.1f} MB")
             self.upload_with_split(video_path, folder_name)
-            self.msg(f"Episode {i}/{len(video_files)} done!")
 
         shutil.rmtree(extract_dir, ignore_errors=True)
-        self.msg(f"SEASON COMPLETE!\n{len(video_files)} episodes upload ho gaye!")
+        self.msg(f"🏆 SEASON COMPLETE!\n{len(video_files)} episodes upload ho gaye!")
 
     # ─── Worker ──────────────────────────────────────────────────────────────
 
@@ -651,19 +663,21 @@ class BotInstance:
                 while self.queue_paused:
                     time.sleep(5)
                 item = self.task_queue.get()
-                self.msg(f"PROCESSING...\n{item.get('link', '')[:80]}")
+                self.current_processing_item = item
+                self.msg(f"🔄 PROCESSING START:\n{item.get('link', '')[:60]}")
                 try:
                     if item["type"] == "zip":
                         self.process_zip(item["link"], item.get("folder", ""))
                     else:
                         self.process_direct(item["link"], item.get("folder", ""))
                 except Exception as e:
-                    self.msg(f"Error: {str(e)[:150]}")
+                    self.msg(f"❌ Worker error: {str(e)[:150]}")
                 finally:
+                    self.current_processing_item = None
                     self.task_queue.task_done()
-            self.msg("QUEUE COMPLETE!\n\nAgla link bhejein")
+            self.msg("✨ ALL QUEUE TASKS COMPLETED!")
         except Exception as e:
-            self.msg(f"Worker crash: {str(e)[:150]}")
+            self.msg(f"⚠️ Worker crash: {str(e)[:150]}")
         finally:
             with self.worker_lock:
                 self.is_working = False
@@ -677,13 +691,11 @@ class BotInstance:
 
 # ─── Initialization & Polling Hook ──────────────────────────────────────────
 
-# BOTS list se active instance create karte hain
 active_bots = {}
 for bot_cfg in BOTS:
     instance = BotInstance(bot_cfg["token"], bot_cfg["chat_id"], bot_cfg["state_file"])
     active_bots[bot_cfg["token"]] = instance
 
-# Telegram Bot events register karne ke liye main bot configuration
 main_bot_cfg = BOTS[0]
 bot = telebot.TeleBot(main_bot_cfg["token"])
 inst = active_bots[main_bot_cfg["token"]]
@@ -691,9 +703,41 @@ inst = active_bots[main_bot_cfg["token"]]
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     if message.chat.id == inst.chat_id:
-        inst.check_login_status()
+        bot.reply_to(message, "🚀 Bot ready hai!\n\nCommands:\n/status - Check bot configuration\n/queue - Check upload list")
+        # Verification lamba process background thread par shift kar diya taake bot band na ho
+        threading.Thread(target=inst.check_login_status, daemon=True).start()
     else:
-        bot.reply_to(message, "Aap is bot ko use karne ke liye authorized nahi hain.")
+        bot.reply_to(message, "Authorized user nahi hain.")
+
+@bot.message_handler(commands=['status'])
+def send_status(message):
+    if message.chat.id != inst.chat_id: return
+    status_text = f"🤖 **BOT STATUS REPORT**\n\n"
+    status_text += f"🔹 **State:** {inst.ctx['state']}\n"
+    status_text += f"🔹 **Worker running:** {inst.is_working}\n"
+    if inst.current_processing_item:
+        status_text += f"⚡ **Processing:** {inst.current_processing_item['link'][:50]}...\n"
+    else:
+        status_text += f"⚡ **Processing:** Kuch nahi (IDLE)\n"
+    bot.send_message(inst.chat_id, status_text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['queue'])
+def send_queue_details(message):
+    if message.chat.id != inst.chat_id: return
+    q_size = inst.task_queue.qsize()
+    
+    queue_text = f"📋 **QUEUE & UPLOAD REPORT**\n\n"
+    queue_text += f"⏳ **Waiting in Queue:** {q_size} links\n"
+    
+    # Upload history list print karna
+    queue_text += f"\n✅ **Uploaded Files ({len(inst.uploaded_history)}):**\n"
+    if inst.uploaded_history:
+        for idx, filename in enumerate(inst.uploaded_history[-10:], 1):  # Last 10 uploads show karega
+            queue_text += f"{idx}. `{filename}`\n"
+    else:
+        queue_text += "Abhi tak koi file upload nahi hui.\n"
+        
+    bot.send_message(inst.chat_id, queue_text, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
@@ -702,27 +746,28 @@ def handle_all_messages(message):
 
     text = message.text.strip()
 
-    # OTP aur Number states handling
+    # Number update code logic in thread
     if inst.ctx["state"] == "WAITING_FOR_NUMBER":
         inst.ctx["number"] = text
         inst.ctx["state"] = "NUMBER_RECEIVED"
+        bot.send_message(inst.chat_id, "✅ Number mil gaya! Processing...")
         return
 
+    # OTP update code logic in thread
     if inst.ctx["state"] == "WAITING_FOR_OTP":
         inst.ctx["otp"] = text
         inst.ctx["state"] = "OTP_RECEIVED"
+        bot.send_message(inst.chat_id, "✅ OTP mil gaya! Processing...")
         return
 
-    # Link extraction login
     if text.startswith("http://") or text.startswith("https://"):
         ttype = "zip" if is_zip_url(text) else "direct"
         inst.task_queue.put({"type": ttype, "link": text, "folder": inst.ctx["pending_folder"]})
-        inst.msg(f"Link Queue mein add ho gaya hai! (Type: {ttype})")
+        inst.msg(f"📥 Link Queue mein add ho gaya! (Baari par process hoga)\nTotal remaining: {inst.task_queue.qsize()}")
         inst.start_worker()
     else:
-        inst.msg("Sahi URL bhejein ya login requirements poori karein.")
+        inst.msg("⚠️ Please check input! Ya to valid URL bhejien ya /start karke authentication step follow karein.")
 
 if __name__ == "__main__":
-    print("Bot starting polling loop...")
-    # Infinity polling script ko background mein active rakhegi aur band nahi hone degi
+    print("Bot is successfully listening...")
     bot.infinity_polling()
